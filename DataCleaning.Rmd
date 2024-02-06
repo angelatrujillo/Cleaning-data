@@ -1,0 +1,196 @@
+<br> 
+<img src="https://i.imgur.com/6U6q5jQ.png"/>
+
+# Data Cleaning in R
+
+
+
+The data we have collected may have several issues we need to identify:
+
+* Are there missing values? How are they represented?
+* Is the format of the table ready to be analyzed? Are there other elements not relevant but distracting or likely to confuse our work?
+* Is every cell well written? are there characters that may not allow future analysis?
+
+Let's check some data:
+
+```{r, echo=FALSE}
+rm(list = ls())
+library(XML)
+library(RCurl)
+
+# URL
+wikiLink="https://en.wikipedia.org/wiki/List_of_freedom_indices" 
+
+# Data
+wikiLinkContents = getURL(wikiLink) 
+freedomDFs = readHTMLTable(wikiLinkContents,header = T,encoding = "UTF-8",
+                           stringsAsFactors=FALSE)
+length(freedomDFs)
+```
+Let's keep the second one:
+
+```{r}
+freedom=freedomDFs[[2]]
+head(freedom)
+```
+
+## 1. Clean headers:
+
+```{r}
+# check headers
+
+names(freedom)
+```
+Cleaning requires a strategy. In the strings above your main problem is the footnotes and the quasi-duplicates. 
+
+```{r, eval=TRUE}
+# avoid trailing or leading spaces
+names(freedom)=trimws(names(freedom))
+# the quasi duplicates
+ScoreColumn=names(freedom)[grep('Score',names(freedom))]
+ScoreColumn
+```
+```{r}
+# the not quasi duplicates
+names(freedom)[-grep('Score',names(freedom))]
+```
+```{r}
+# save the last one but the first one:
+notScoreColums=names(freedom)[-grep('Score',names(freedom))][-1]
+notScoreColums
+```
+
+
+Let's keep the last ones without the footnotes, let's _divide and conquer_ using **strsplit()**:
+```{r}
+strsplit(notScoreColums,'[',fixed=T,)
+```
+You see how I split each element, but the resulting list is not what you want, you need to keep the first element only:
+
+```{r}
+unlist(strsplit(notScoreColums,'[',fixed=T,))
+```
+```{r}
+unlist(strsplit(notScoreColums,'[',fixed=T,))[seq(1,8,2)]
+```
+This is not bad at all. However, a more efficient alternative is using **regular expressions**. There are books about this topic, but I will share some patterns that may prove useful.
+
+In this situation, I want to:
+
+* Get rid of footnotes.
+* Get rid of the years.
+
+Let's see:
+
+```{r, eval=TRUE}
+# one or more consecutive number \\d+
+# anything that looks like \\[\\w+\\]
+# using '|' as or
+# trimws() for leading/trailing spaces 
+# magrittr for pipe %
+
+library(magrittr)
+pattern='\\d+|\\[\\w+\\]'
+nothing=''
+
+notScoreColumsCleaner=gsub(pattern,nothing,notScoreColums)%>%trimws()
+
+# now:
+notScoreColumsCleaner
+```
+
+
+Let's create acronyms:
+```{r}
+acronyms=abbreviate(notScoreColumsCleaner,1,named = F)
+acronyms
+```
+We concatenate "score" to the acronyms into another list:
+
+```{r}
+acronyms_score=paste0(acronyms,"_score")
+acronyms_score
+```
+Let's rename:
+
+```{r}
+names(freedom)[-grep('Score',names(freedom))][-1]=acronyms
+names(freedom)[grep('Score',names(freedom))]=acronyms_score
+head(freedom)
+```
+
+
+## 2. Clean the data values.
+
+Since there are categories, we could try some frequency tables:
+
+```{r, eval=TRUE}
+library(plyr) # install it first 
+count(freedom,'FitW')
+count(freedom,'IoEF')
+count(freedom,'PFI')
+count(freedom,'DI')
+```
+
+The categorical data is not well writtem: wrong ordering and the missing values coded as **_n/a_**. Let's solve the categorical data levels:
+
+```{r}
+freedom[,acronyms]=lapply(freedom[,acronyms],
+                          function(y) gsub("\\d", "", y)%>% # delete numbers
+                              trimws()) # by unneeded spaces
+```
+
+
+Let's see the numeric columns. Let's identify cell that do not have numeric strings:
+
+```{r}
+head(freedom[acronyms_score])
+```
+```{r, warning=TRUE, eval=TRUE}
+badValues=c('n/a')
+for (col in acronyms_score){
+    currentBad=grep('^\\d+\\.*\\d*$', freedom[,col], invert = TRUE, value = TRUE)
+    badValues=c(badValues,unique(currentBad))
+    
+}
+badValues=unique(badValues)
+badValues
+```
+
+
+We will need to replace those values with a proper missing value:
+
+```{r, eval=TRUE}
+
+library(naniar)
+freedom=freedom %>%
+  replace_with_na_all(condition = ~.x %in% badValues)
+
+```
+
+Let's keep the complete data:
+```{r}
+freedom=freedom[complete.cases(freedom),] # keep complete
+row.names(freedom)=NULL #reset index
+freedom
+```
+
+## 3. Check key column
+
+```{r}
+head(freedom$Country)
+```
+```{r}
+# to upper case and no trailing or leading spaces
+
+freedom$Country=freedom$Country%>%trimws(whitespace = "[\\h\\v]")%>%toupper()
+row.names(freedom)=NULL
+head(freedom)
+```
+
+## 4. Save output
+
+```{r}
+write.csv(freedom,'freedom_R.csv',row.names = F)
+```
+
